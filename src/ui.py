@@ -2,358 +2,21 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from tkinter import font as tkfont
 import os
-import random
-import heapq
 import math
 import json 
 from PIL import Image, ImageTk 
-from collections import deque
-from dataclasses import dataclass
-from typing import Optional, FrozenSet, Dict, Tuple, List, Set
+from typing import Optional
+
+from .graph import Graph
+from .algorithms import bfs, dfs, dijkstra, astar, kruskal, prim
 
 
-@dataclass
-class Edge:
-    u: str                              
-    v: str                              
-    distance: int = 1
-    time:int = 1
-    accessible: bool = True
-    closed: bool = False
-    line_id: Optional[int] = None      
-    text_id: Optional[int] = None      
-    
-    
-    def key(self) -> FrozenSet[str]:
-        return frozenset({self.u, self.v})  # use frozen set to ensure immutability --> makes sure each edge unique
-
-
-    def color(self) -> str:     # choose color based on path logic state
-        if self.closed:
-            return "red"
-        if not self.accessible:
-            return "orange"
-        return "black"
-
-class Graph:
-    def __init__(self):
-
-        self.nodes: Dict[str, Tuple[int, int, Optional[int], Optional[int]]] = {} 
-        self.edges: Dict[FrozenSet[str], Edge] = {} 
-        self.adj: Dict[str, Dict[str, Edge]] = {} 
-        
-    def add_node(self, name, x, y):  
-        if name in self.nodes:
-            raise ValueError(f"Duplicate node '{name}'")    # CHECK --> no duplicate nodes 
-        self.nodes[name] = (x, y, None, None)   # oid/lid filled in later by GUI.draw_node()
-        self.adj[name] = {} # init empty neighbor dict for this node
-        
-    def add_edge(self, u, v, distance, time, accessible) -> Edge:
-        if u == v:
-            raise ValueError("Cannot connect a node to itself")     # CHECK --> no self-looping nodes 
-        if u not in self.nodes or v not in self.nodes:
-            raise ValueError("Both endpoints must exist")   # CHECK --> both nodes must exist      
-        key = frozenset({u, v})
-        if key in self.edges:
-            raise ValueError("Edge already exists")         # CHECK --> block multiedges between same endpoints
-        e = Edge(u, v, distance, time, accessible)
-        self.edges[key] = e      # global edge registry
-        self.adj[u][v] = e       # symmetric adjacency 
-        self.adj[v][u] = e
-        return e
-    
-    
-    def remove_edge(self, u, v) -> Edge:    # fully remove an edge from both global registry and adjacency dicts
-        key = frozenset({u, v})
-        e = self.edges.pop(key, None)
-        if not e:
-            raise ValueError("Edge does not exist")
-        if u in self.adj and v in self.adj[u]:
-            del self.adj[u][v]
-        if v in self.adj and u in self.adj[v]:
-            del self.adj[v][u]
-        return e    # return Edge so GUI can also delete the canvas visuals
-    
-    
-    def randomize_edge_weights(self):   # dynamic traffic sim
-        for e in self.edges.values():
-            e.distance = random.randint(1, 20)
-            e.time = random.randint(1, 20)
-    
-    
-    def get_edge(self, u, v):
-        return self.edges.get(frozenset({u, v}))
-    
-    
-    def neighbors(self, node, accessible_only):     # ensure deterministic neighbor ordering to get same results so BFS/DFS become predictable and testable
-        out = []
-        for nbr, e in self.adj.get(node, {}).items():
-            if e.closed: 
-                continue
-            if accessible_only and not e.accessible:
-                continue
-            out.append((nbr, e))
-        out.sort(key=lambda t: t[0])    # stable traversal order so demo is repeatable
-        return out
-    
-    
-    def bfs(self, start, goal, accessible_only):
-        if start not in self.nodes or goal not in self.nodes:
-            raise ValueError("Start and goal must be valid nodes")
-        q = deque([start])
-        visited: Set[str] = {start}
-        parent: Dict[str, Optional[str]] = {start: None}
-        order: List[str] = []    # order = full visitation order (when node popped from queue)
-        discover: List[str] = []    # helper list to track node pings
-        
-        while q:
-            cur = q.popleft()
-            order.append(cur)
-            if cur == goal:
-                break
-            for number, _ in self.neighbors(cur, accessible_only):
-                if number not in visited:
-                    visited.add(number)
-                    parent[number] = cur
-                    q.append(number)
-                    discover.append(number)
-                    
-        if goal not in parent:
-            return [], order, discover
-        
-        path = []
-        cur: Optional[str] = goal
-        while cur is not None:
-            path.append(cur)
-            cur = parent[cur]
-        path.reverse()
-        return path, order, discover
- 
- 
-    def dfs(self, start, goal, accessible_only):
-        if start not in self.nodes or goal not in self.nodes:
-            raise ValueError("Start and goal must be valid nodes")
-        visited: Set[str] = set()
-        parent: Dict[str, Optional[str]] = {start: None}
-        found = False
-        order: List[str] = [] 
-        discover: List[str] = []
-        
-        def recurse(u):
-            nonlocal found
-            if found:
-                return
-            visited.add(u)
-            order.append(u)
-            if u == goal:
-                found = True 
-                return
-            for number, _ in self.neighbors(u, accessible_only):
-                if number not in visited:
-                    parent[number] = u
-                    discover.append(number)
-                    recurse(number)
-        
-        recurse(start)
-        if not found:
-            return [], order, discover
-        
-        path = []
-        cur: Optional[str] = goal
-        while cur is not None:
-            path.append(cur)
-            cur = parent[cur]
-        path.reverse()
-        return path, order, discover
-    
-    
-    def toggle_closed(self, u, v):
-        e = self.get_edge(u, v)
-        if not e:
-            raise ValueError("Edge does not exist")
-        e.closed = not e.closed
-        return e
-    
-    
-    def toggle_accessibility(self, u, v):
-        e = self.get_edge(u, v)
-        if not e:
-            raise ValueError("Edge does not exist")
-        e.accessible = not e.accessible
-        return e
-            
-    def remove_node(self, name) -> List[Edge]:
-        if name not in self.nodes:
-            raise ValueError("Node does not exist")
-
-        neighbors = list(self.adj[name].keys())
-
-        removed_edges: List[Edge] = []
-
-        for nbr in neighbors:
-            e = self.get_edge(name, nbr)
-            if e:
-                self.remove_edge(name, nbr)
-                removed_edges.append(e)
-
-        del self.adj[name]
-        del self.nodes[name]
-
-        return removed_edges
-    
-
-    def heuristic(self, u, v, weight_type): # toggle heuristic for simple swap from dijkstra => A*
-        x1, y1, _, _ = self.nodes[u]
-        x2, y2, _, _ = self.nodes[v]
-        return math.hypot(x2 - x1, y2 - y1) if weight_type == "distance" else 0
-
-
-    def dijkstra(self, start, goal, weight_type, accessible_only):
-        return self._weighted_search(start, goal, weight_type, accessible_only, use_heuristic=False)
-
-
-    def astar(self, start, goal, weight_type, accessible_only):
-        return self._weighted_search(start, goal, weight_type, accessible_only, use_heuristic=True)
-
-
-    def _weighted_search(self, start, goal, weight_type, accessible_only, use_heuristic):
-        if start not in self.nodes or goal not in self.nodes:
-            raise ValueError("Start and goal must be valid nodes")
-
-        pq = [(0, start)]        
-        costs = {start: 0}
-        parent = {start: None}        
-        visited_order = []      
-        discover_order = []     
-
-        while pq:
-            cur_priority, u = heapq.heappop(pq)
-            if cur_priority > costs.get(u, float('inf')) + (self.heuristic(u, goal, weight_type) if use_heuristic else 0):
-                continue
-            visited_order.append(u)
-            if u == goal:
-                break
-
-            for v, edge in self.neighbors(u, accessible_only):
-                weight = edge.distance if weight_type == "distance" else edge.time
-                new_cost = costs[u] + weight
-
-                if new_cost < costs.get(v, float('inf')):   # relaxation step
-                    costs[v] = new_cost
-                    parent[v] = u
-                    priority = new_cost # Dijkstra: priority = new_cost; A*: priority = new_cost + heuristic(v, goal)
-
-                    if use_heuristic:
-                        priority += self.heuristic(v, goal, weight_type)                    
-                    heapq.heappush(pq, (priority, v))
-                    discover_order.append(v)
-
-        if goal not in parent:
-            return [], visited_order, discover_order        
-        path = []
-        curr = goal
-        while curr is not None:
-            path.append(curr)
-            curr = parent[curr]
-        path.reverse()
-              
-        return path, visited_order, discover_order
-
-
-    def kruskal(self, weight_type, accessible_only):
-        valid_edges = []
-        for e in self.edges.values():
-            if e.closed: continue
-            if accessible_only and not e.accessible: continue
-            weight = e.distance if weight_type == "distance" else e.time
-            valid_edges.append((weight, e))
-            
-        valid_edges.sort(key=lambda x: x[0])
-        dsu = DisjointSet(self.nodes.keys())
-        mst_edges = []
-        total_cost = 0
-        
-        for weight, e in valid_edges:
-            if dsu.union(e.u, e.v):
-                mst_edges.append(e)
-                total_cost += weight
-                
-        return mst_edges, total_cost
-
-    def prim(self, start_node, weight_type, accessible_only):
-        if start_node not in self.nodes:
-            raise ValueError("Start node required for Prim's")
-            
-        mst_edges = []
-        visited = {start_node}
-        total_cost = 0
-        
-        pq = []
-        for nbr, e in self.neighbors(start_node, accessible_only):
-            w = e.distance if weight_type == "distance" else e.time
-            heapq.heappush(pq, (w, nbr, e))
-            
-        while pq:
-            weight, u, edge = heapq.heappop(pq)
-            
-            if u in visited:
-                continue
-                
-            visited.add(u)
-            mst_edges.append(edge)
-            total_cost += weight
-            
-            for nbr, e in self.neighbors(u, accessible_only):
-                if nbr not in visited:
-                    w = e.distance if weight_type == "distance" else e.time
-                    heapq.heappush(pq, (w, nbr, e))
-                    
-        return mst_edges, total_cost
-
-
-    def to_dict(self):
-        """Serialize graph data to a dictionary."""
-        return {
-            "nodes": [
-                {"name": n, "x": data[0], "y": data[1]} 
-                for n, data in self.nodes.items()
-            ],
-            "edges": [
-                {
-                    "u": e.u, "v": e.v, 
-                    "distance": e.distance, "time": e.time, 
-                    "accessible": e.accessible, "closed": e.closed
-                }
-                for e in self.edges.values()
-            ]
-        }
-
-    def from_dict(self, data):
-        """Clear current graph and rebuild from dictionary."""
-        self.nodes.clear()
-        self.edges.clear()
-        self.adj.clear()
-        
-        for n_data in data["nodes"]:
-            self.nodes[n_data["name"]] = (n_data["x"], n_data["y"], None, None)
-            self.adj[n_data["name"]] = {}
-            
-        for e_data in data["edges"]:
-            self.add_edge(
-                e_data["u"], e_data["v"], 
-                e_data["distance"], e_data["time"], 
-                e_data["accessible"]
-            )
-            if e_data.get("closed", False):
-                self.edges[frozenset({e_data["u"], e_data["v"]})].closed = True
-                
-    
 class GUI:
-    NODE_R = 10     # node size control
-    ANIM_TRAVERSAL_MS = 600     # ping interval timing
-    ANIM_EDGE_MS = 400          # interval between edges turning green 
-    ANIM_PING_FLASH_MS = 600    # duration node stays yellow
-    ANIM_NODE_MS = 400          # interval between nodes turning green 
+    NODE_R = 10     
+    ANIM_TRAVERSAL_MS = 600     
+    ANIM_EDGE_MS = 400          
+    ANIM_PING_FLASH_MS = 600    
+    ANIM_NODE_MS = 400          
     
     
     def __init__(self, root: tk.Tk):
@@ -362,13 +25,13 @@ class GUI:
         self.mode_place_pending_name: Optional[str] = None
         self.selected_nodes: list[str] = []
         
-        self.bg_image_original = None  # stores high-res PIL Image
-        self.bg_image_tk = None        # Ttinter-ready image
-        self.bg_file_path = None       # file path for saving
+        self.bg_image_original = None 
+        self.bg_image_tk = None        
+        self.bg_file_path = None       
         self.map_item: Optional[int] = None              
         self.overlay_var = tk.BooleanVar(value = True) 
         
-        self.current_zoom = 1.0  # Track zoom level  
+        self.current_zoom = 1.0
         
         self.ui_font = tkfont.Font(family="Arial", size=11, weight="normal")            
         self.ui_font_bold = tkfont.Font(family="Arial", size=13, weight="bold")  
@@ -379,9 +42,9 @@ class GUI:
         available_themes = style.theme_names()   
                                    
         if "aqua" in available_themes:
-            style.theme_use("aqua")  # mac
+            style.theme_use("aqua") 
         elif "vista" in available_themes:
-            style.theme_use("vista") # windows 
+            style.theme_use("vista") 
         else:
             for candidate in ("clam", "alt", "default", "classic"): 
                 if candidate in available_themes:
@@ -391,8 +54,8 @@ class GUI:
         style.configure(".", font=self.ui_font)          
         self.root.option_add("*TCombobox*Listbox*Font", self.ui_font)       
         
-        self.build_layout() # build all frames and widgets
-        self.keybind()  # hook hotkeys
+        self.build_layout() 
+        self.keybind()  
         
         self.animating = False
         self.current_animation_tokens: list[int] = []        
@@ -423,7 +86,6 @@ class GUI:
         self.right = ttk.Frame(self.root) 
         self.right.grid(row=0, column=1, sticky="nsew")
 
-
         self.right_canvas = tk.Canvas(self.right, width=500) 
         self.right_scrollbar = ttk.Scrollbar(self.right, orient="vertical", command=self.right_canvas.yview)
         
@@ -433,8 +95,10 @@ class GUI:
         box = tk.Frame(self.right_canvas, padx=8, pady=8)
         self.right_canvas_window = self.right_canvas.create_window((0,0), window=box, anchor="nw")
 
+
         def on_frame_configure(event):
             self.right_canvas.configure(scrollregion=self.right_canvas.bbox("all"))
+        
         
         def on_canvas_configure(event):
             self.right_canvas.itemconfig(self.right_canvas_window, width=event.width)
@@ -442,14 +106,17 @@ class GUI:
         box.bind("<Configure>", on_frame_configure)
         self.right_canvas.bind("<Configure>", on_canvas_configure)
 
+
         def _on_mousewheel(event):
             try:
                 self.right_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
             except:
                 pass
 
+
         def _bind_wheel(event):
             self.right_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            
             
         def _unbind_wheel(event):
             self.right_canvas.unbind_all("<MouseWheel>")
@@ -460,8 +127,9 @@ class GUI:
         ttk.Label(box, text = "Project Management:", font=self.ui_font_bold).pack(anchor="w", pady=(0,4))
         row_proj = ttk.Frame(box)
         row_proj.pack(fill=tk.X, pady=2)
-        ttk.Button(row_proj, text="Save Project", command=self.save_project).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,2))
-        ttk.Button(row_proj, text="Load Project", command=self.load_project).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2,0))
+        ttk.Button(row_proj, text="Save", command=self.save_project).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,2))
+        ttk.Button(row_proj, text="Load", command=self.load_project).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2,0))
+        ttk.Button(row_proj, text="Reset", command=self.reset_canvas).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2,0))
 
         ttk.Separator(box, orient='horizontal').pack(fill='x', pady=10)
         ttk.Label(box, text = "Map Background:", font=self.ui_font_bold).pack(anchor="w", pady=(0,3))        
@@ -523,7 +191,6 @@ class GUI:
         ttk.Button(box, text="Toggle Accessibility", command=self.toggle_accessible).pack(fill=tk.X, pady=(1,1))
         ttk.Button(box, text = "Randomize All Edge Weights", command = self.randomize).pack(fill = tk.X, pady = (1, 0))
           
-                
         ttk.Separator(box, orient='horizontal').pack(fill='x', pady=10)        
         ttk.Label(box, text = "Route Search:", font=self.ui_font_bold).pack(anchor="w", pady=3)  
         rowS = ttk.Frame(box)
@@ -540,7 +207,7 @@ class GUI:
         self.goal_menu = ttk.Combobox(rowG, textvariable = self.goal_var, values = [], state = "readonly")
         self.goal_menu.pack(side = tk.LEFT, fill = tk.X, expand = True, padx = 4)    
         
-        rowM = ttk.Frame(box)   # metric selection - dist vs time
+        rowM = ttk.Frame(box)   
         rowM.pack(fill=tk.X, pady=4)
         ttk.Label(rowM, text="Optimize For: ").pack(side=tk.LEFT)
         self.metric_var = tk.StringVar(value="distance")
@@ -571,7 +238,6 @@ class GUI:
         ttk.Button(btn_frame_mst, text="Prim's MST (Grow Tree)", 
                    command=lambda: self.execute_mst("prim")).pack(fill=tk.X, pady=1)
         
-        
         ttk.Separator(box, orient='horizontal').pack(fill='x', pady=10)        
         ttk.Label(box, text = "Output:", font=self.ui_font_bold).pack(anchor="w", pady=3)
         out_frame = ttk.Frame(box)
@@ -582,7 +248,6 @@ class GUI:
         self.output.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         yscroll.pack(side=tk.RIGHT, fill=tk.Y)
         
-        
         ttk.Separator(box, orient='horizontal').pack(fill='x', pady=12)
         info_frame = ttk.Frame(box)
         info_frame.pack(fill=tk.X, pady=5)        
@@ -592,19 +257,19 @@ class GUI:
         btn_details.grid(row=0, column=0, padx=2, sticky="ew")        
         btn_help = ttk.Button(info_frame, text="Help", command=self.show_help)
         btn_help.grid(row=0, column=1, padx=2, sticky="ew")
+      
           
-            
     def keybind(self):
         self.canvas.bind("<Button-1>", self.click)
         self.root.bind("<Escape>", self.on_escape)  
-
+       
         
     def text_output(self, str):
         self.output.configure(state="normal")
         self.output.insert(tk.END, str + "\n")
         self.output.see(tk.END)
         self.output.configure(state="disabled")
-        
+       
         
     def start_node(self):
         name = self.node_name_var.get().strip()
@@ -614,10 +279,10 @@ class GUI:
         if name in self.graph.nodes:
             messagebox.showerror("Error", f"Duplicate node '{name}'")
             return
-        self.mode_place_pending_name = name # remember which name will be placed
+        self.mode_place_pending_name = name 
         self.canvas.configure(cursor = "crosshair")
         self.text_output(f"Click on map to place '{name}'.")
-        
+       
         
     def draw_node(self, name, x, y) -> tuple[int, int]:
         r = self.NODE_R
@@ -638,7 +303,7 @@ class GUI:
 
         edge.text_id = self.canvas.create_text(  
             lx, ly, text=f"d : {edge.distance},  t : {edge.time}", font=self.ui_font, fill="gray", angle=ang,
-            tags="all_elements" # <--- ADDED TAG
+            tags="all_elements" 
         )
         self.canvas.tag_raise(edge.text_id) 
 
@@ -666,14 +331,14 @@ class GUI:
             self.text_output(f"Added path:  {u} ↔ {v}   (Distance = {d}, Time = {t}, Accessible = {acc})")
         except Exception as ex:
             messagebox.showerror("Error", str(ex))
-        
+       
         
     def refresh_node_menu(self):
         names = sorted(self.graph.nodes.keys())
         self.start_menu["values"] = names
         self.goal_menu["values"] = names
   
-    
+  
     def click(self, event):
         canvas_x = self.canvas.canvasx(event.x)
         canvas_y = self.canvas.canvasy(event.y)
@@ -681,29 +346,38 @@ class GUI:
         logical_x = canvas_x / self.current_zoom
         logical_y = canvas_y / self.current_zoom
 
+        quick_name = self.node_name_var.get().strip()
+        clicked_node = self.hit_node(canvas_x, canvas_y)
+
         if self.mode_place_pending_name is not None:
-            name = self.mode_place_pending_name            
-            try:
-                self.graph.add_node(name, logical_x, logical_y)                
-                oid, lid = self.draw_node(name, logical_x, logical_y)                
-                x, y, _, _ = self.graph.nodes[name]
-                self.graph.nodes[name] = (x, y, oid, lid)                
-
-                self.mode_place_pending_name = None
-                self.canvas.configure(cursor="")
-                self.node_name_var.set("")
-                self.text_output(f"Placed point: '{name}'")
-                self.refresh_node_menu()
-            except Exception as exc:
-                messagebox.showerror("Error", str(exc))
-                return
+            self._place_node_on_canvas(self.mode_place_pending_name, logical_x, logical_y)
+        elif quick_name and not clicked_node:
+             self._place_node_on_canvas(quick_name, logical_x, logical_y)
         else:           
-            clicked = self.hit_node(canvas_x, canvas_y)
-            if clicked:
-                self.toggle_select_node(clicked)
+            if clicked_node:
+                self.toggle_select_node(clicked_node)
                 self.refresh_node_menu()
 
-        
+
+    def _place_node_on_canvas(self, name, x, y):
+        if name in self.graph.nodes:
+            messagebox.showerror("Error", f"Duplicate node '{name}'")
+            return
+
+        try:
+            self.graph.add_node(name, x, y)                
+            oid, lid = self.draw_node(name, x, y)                
+            self.graph.nodes[name] = (x, y, oid, lid)                
+            self.mode_place_pending_name = None
+            self.canvas.configure(cursor="")
+            self.node_name_var.set("") 
+            self.text_output(f"Placed point: '{name}'")
+            self.refresh_node_menu()
+            
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc))
+      
+       
     def hit_node(self, x, y) -> Optional[str]:
         for item in self.canvas.find_overlapping(x, y, x, y):
             for i in self.canvas.gettags(item):
@@ -728,9 +402,9 @@ class GUI:
                     width = (3 if n in self.selected_nodes else 2),
                 ) 
         self.selected_label.config(text = f"Selected: {self.selected_nodes}")
+      
         
-        
-    def update_visual(self, edge):  # sync canvas after mutating edge state
+    def update_visual(self, edge): 
         if edge.line_id:
             self.canvas.itemconfig(edge.line_id, fill=edge.color(), width=2)
         if edge.text_id:
@@ -740,8 +414,8 @@ class GUI:
             self.canvas.coords(edge.text_id, screen_x, screen_y)
             self.canvas.itemconfig(edge.text_id, font=self.ui_font, text=f"d : {edge.distance},  t : {edge.time}", angle=ang)
             self.canvas.tag_raise(edge.text_id)
+         
             
-    
     def toggle_close(self):
         if len(self.selected_nodes) != 2:
             messagebox.showerror("Error", "Select exactly 2 nodes to toggle")
@@ -771,29 +445,25 @@ class GUI:
         acc_msg = "ACCESSIBLE" if e.accessible else "NOT ACCESSIBLE"
         self.text_output(f"Accessibility updated:  {u} ↔ {v}  is now {acc_msg}")
         
-    
+        
     def remove_edge_gui(self):
         if len(self.selected_nodes) != 2:
             messagebox.showerror("Error", "Select exactly 2 nodes to delete edge")
             return
-
         u, v = self.selected_nodes
         e = self.graph.get_edge(u, v)
         if not e:
             messagebox.showerror("Error", "No edge exists between the selected nodes")
             return
-
         try:
             e = self.graph.remove_edge(u, v)
         except Exception as ex:
             messagebox.showerror("Error", str(ex))
             return
-
         if e.line_id:
             self.canvas.delete(e.line_id)
         if e.text_id:
             self.canvas.delete(e.text_id)
-
         self.clear_selection()
         self.text_output(f"Removed path:  {u} ↔ {v} \n")
 
@@ -802,38 +472,31 @@ class GUI:
         if len(self.selected_nodes) != 1:
             messagebox.showerror("Error", "Select exactly 1 point")
             return
-
         name = self.selected_nodes[0]
-
         if name not in self.graph.nodes:
             messagebox.showerror("Error", "That point no longer exists")
             return
-
         x, y, oid, lid = self.graph.nodes[name]
-
         try:
             removed_edges = self.graph.remove_node(name)
         except Exception as ex:
             messagebox.showerror("Error", str(ex))
             return
-
         if oid:
             self.canvas.delete(oid)
         if lid:
             self.canvas.delete(lid)
-
         for e in removed_edges:
             if e.line_id:
                 self.canvas.delete(e.line_id)
             if e.text_id:
                 self.canvas.delete(e.text_id)
-
         self.clear_selection()
         self.refresh_node_menu()
         self.text_output(f"Removed building '{name}' and its connected paths.")
         self.start_var.set("")
         self.goal_var.set("")
-        
+      
             
     def randomize(self):
         self.clear_animation()
@@ -841,7 +504,7 @@ class GUI:
         for e in self.graph.edges.values():
             self.update_visual(e)
         self.text_output("All path weights have been randomized to simulate dynamic campus traffic.")
-        
+      
         
     def clear_animation(self):
         for token in self.current_animation_tokens:
@@ -857,7 +520,7 @@ class GUI:
             if oid:
                 self.canvas.itemconfig(oid, fill="black", outline = "black", width = 2)
         self.animating = False
-        
+       
         
     def ping_node(self, name):
         _, _, oid, _ = self.graph.nodes[name]
@@ -884,13 +547,13 @@ class GUI:
         
         try:
             if algo == "bfs":
-                path, order, discover = self.graph.bfs(start, goal, accessible_only)
+                path, order, discover = bfs(self.graph, start, goal, accessible_only)
             elif algo == "dfs":
-                path, order, discover = self.graph.dfs(start, goal, accessible_only)
+                path, order, discover = dfs(self.graph, start, goal, accessible_only)
             elif algo == "dijkstra":
-                path, order, discover = self.graph.dijkstra(start, goal, weight_type, accessible_only)
+                path, order, discover = dijkstra(self.graph, start, goal, weight_type, accessible_only)
             elif algo == "astar":
-                path, order, discover = self.graph.astar(start, goal, weight_type, accessible_only)
+                path, order, discover = astar(self.graph, start, goal, weight_type, accessible_only)
                 
         except Exception as e:
             messagebox.showerror("Error", str(e))
@@ -912,7 +575,7 @@ class GUI:
             self.text_output("--------------------------------------------------\n")
                     
         self.clear_animation()
-        visit_seq = [start] + list(discover)    # ping nodes by discovery 
+        visit_seq = [start] + list(discover)    
         delay = self.ANIM_TRAVERSAL_MS
         
         for i, n in enumerate(visit_seq):
@@ -932,9 +595,8 @@ class GUI:
                 oid = self.graph.nodes[node][2]
                 if oid:
                     self.current_animation_tokens.append(self.root.after(node_start + self.ANIM_NODE_MS * k,lambda o=oid: self.canvas.itemconfig(o, fill="green", outline="green", width=3)))
+       
                 
-
-
     def on_escape(self, event = None):              
         self.clear_selection()
 
@@ -949,8 +611,7 @@ class GUI:
         self.canvas.configure(cursor = "")
 
 
-    def compute_edge_label_position(self, edge, offset_px: int = 12): #  helper to position distance/time label
-        # take midpoint of  edge segment -> find perpendicular unit normal-> nudge label 'offset_px' along normal so its not on top of line -> find angle for nice orientation
+    def compute_edge_label_position(self, edge, offset_px: int = 12): 
         x_u, y_u, _, _ = self.graph.nodes[edge.u]
         x_v, y_v, _, _ = self.graph.nodes[edge.v]
         mid_x, mid_y = (x_u + x_v) / 2.0, (y_u + y_v) / 2.0
@@ -970,11 +631,12 @@ class GUI:
         
         return label_x, label_y, angle_draw
 
+
     def execute_mst(self, algo):
         weight_type = self.metric_var.get()
         accessible_only = bool(self.access_only_var.get())
         
-        start_node = self.start_var.get().strip() # prim's needs start node => choose arbitrarily choose first or user choice
+        start_node = self.start_var.get().strip() 
         if algo == "prim" and not start_node:
             if self.graph.nodes:
                 start_node = list(self.graph.nodes.keys())[0]
@@ -986,9 +648,9 @@ class GUI:
         
         try:
             if algo == "kruskal":
-                edges, cost = self.graph.kruskal(weight_type, accessible_only)
+                edges, cost = kruskal(self.graph, weight_type, accessible_only)
             elif algo == "prim":
-                edges, cost = self.graph.prim(start_node, weight_type, accessible_only)
+                edges, cost = prim(self.graph, start_node, weight_type, accessible_only)
         except Exception as e:
             messagebox.showerror("Error", str(e))
             return
@@ -1002,13 +664,27 @@ class GUI:
         self.clear_animation()
         delay = self.ANIM_EDGE_MS
         
-        for i, e in enumerate(edges): # turn line Blue to distinguish from pathfinding (green)
+        for i, e in enumerate(edges): 
             if e.line_id:
                 self.current_animation_tokens.append(
                     self.root.after(delay * i, 
                                   lambda lid=e.line_id: self.canvas.itemconfig(lid, fill="blue", width=4))
                 )
-                
+            
+            u_oid = self.graph.nodes[e.u][2]
+            v_oid = self.graph.nodes[e.v][2]
+            
+            if u_oid:
+                self.current_animation_tokens.append(
+                    self.root.after(delay * i, 
+                                    lambda oid=u_oid: self.canvas.itemconfig(oid, fill="blue", outline="blue", width=3))
+                )
+            if v_oid:
+                self.current_animation_tokens.append(
+                    self.root.after(delay * i, 
+                                    lambda oid=v_oid: self.canvas.itemconfig(oid, fill="blue", outline="blue", width=3))
+                )
+         
                 
     def create_popup(self, title, content_text):
         if self.current_popup is not None and self.current_popup.winfo_exists():
@@ -1021,6 +697,7 @@ class GUI:
         top.geometry("750x1200")
         top.transient(self.root) 
         self.current_popup = top
+        
         
         def on_close():
             self.current_popup = None
@@ -1110,7 +787,8 @@ class GUI:
             ("normal", "• Pan: If the map is larger than the window, use your mouse wheel or trackpad to scroll."),
 
             ("subheader", "2. Building the Graph"),
-            ("normal", "• Place Node: Enter a name (e.g., 'Library'), click 'Place Point', then click on the map."),
+            ("normal", "• Place Node (Method A - Beginner): Type a name, click 'Place Point', then click on the map."),
+            ("normal", "• Place Node (Method B - Fast): Type a name and just click anywhere on the empty map to place it instantly."),
             ("normal", "• Connect Nodes: Click two nodes (they turn blue), enter Distance/Time, and click 'Add Path'."),
             ("normal", "• Edit: Select nodes to Remove, Toggle Closed (block path), or Toggle Accessibility (stairs/elevators)."),
             
@@ -1139,17 +817,18 @@ class GUI:
         if file_path:
             self.set_background(file_path)
 
+
     def set_background(self, file_path):
         try:
-            self.bg_image_original = Image.open(file_path) # Load via PIL
+            self.bg_image_original = Image.open(file_path) 
             self.bg_file_path = file_path
             self.refresh_background()
             self.text_output(f"Loaded map: {os.path.basename(file_path)}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load image: {e}")
 
+
     def refresh_background(self):
-        """Redraws the background image based on current zoom and visibility."""
         if self.map_item:
             self.canvas.delete(self.map_item)
             self.map_item = None
@@ -1165,7 +844,7 @@ class GUI:
         self.bg_image_tk = ImageTk.PhotoImage(resized)        
        
         self.map_item = self.canvas.create_image(0, 0, image=self.bg_image_tk, anchor="nw")
-        self.canvas.tag_lower(self.map_item) # Push behind nodes
+        self.canvas.tag_lower(self.map_item) 
 
 
     def save_project(self):
@@ -1188,6 +867,7 @@ class GUI:
             self.text_output(f"Project saved to {os.path.basename(file_path)}")
         except Exception as e:
             messagebox.showerror("Error", f"Save failed: {e}")
+
 
     def load_project(self):
         file_path = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json")])
@@ -1245,35 +925,23 @@ class GUI:
             if e.text_id:
                 self.canvas.itemconfig(e.text_id, font=new_font)
 
-class DisjointSet:  # helper for kruskal
-    def __init__(self, nodes):
-        self.parent = {n: n for n in nodes}
-    
-    def find(self, i):
-        if self.parent[i] != i:
-            self.parent[i] = self.find(self.parent[i])
-        return self.parent[i]
-    
-    def union(self, i, j):  # parent swap
-        root_i = self.find(i)
-        root_j = self.find(j)
-        if root_i != root_j:
-            self.parent[root_i] = root_j
-            return True 
-        return False 
 
-    
-def main():
-    root = tk.Tk()
-    root.title("GraphAlgo Visualizer - Universal Pathfinding Tool")
-    root.geometry("1200x900") 
-    try:
-        root.state('zoomed') 
-    except:
-        root.attributes('-zoomed', True)
-    GUI(root)
-    root.mainloop()
+    def reset_canvas(self):
+        if not messagebox.askyesno("Confirm Reset", "Are you sure you want to clear the canvas? All unsaved nodes and paths will be lost."):
+            return
 
-    
-if __name__ == "__main__":
-    main()
+        self.graph.clear()
+        self.canvas.delete("all") 
+        self.map_item = None
+        
+        if self.bg_image_original:
+             self.refresh_background()
+        
+        self.clear_selection()
+        self.refresh_node_menu()
+        self.start_var.set("")
+        self.goal_var.set("")
+        
+        self.text_output("--------------------------------------------------")
+        self.text_output("Canvas Reset: All nodes and paths have been cleared.")
+        self.text_output("--------------------------------------------------\n")
